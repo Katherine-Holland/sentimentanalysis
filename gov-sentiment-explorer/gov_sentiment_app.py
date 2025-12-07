@@ -1,7 +1,9 @@
 import requests
-from textblob import TextBlob
+from nltk.sentiment import SentimentIntensityAnalyzer
 import streamlit as st
 import pandas as pd
+
+sia = SentimentIntensityAnalyzer()
 
 PETITIONS_API_URL = "https://petition.parliament.uk/petitions.json"
 
@@ -9,10 +11,6 @@ PETITIONS_API_URL = "https://petition.parliament.uk/petitions.json"
 # ---------- DATA HELPERS ---------- #
 
 def fetch_petitions(limit: int = 50):
-    """
-    Fetch a list of petition titles and summaries from the UK Parliament petitions endpoint.
-    Returns a list of dicts with Title, Summary and Combined text (title + background).
-    """
     response = requests.get(PETITIONS_API_URL, timeout=10)
     response.raise_for_status()
     data = response.json()
@@ -34,31 +32,29 @@ def fetch_petitions(limit: int = 50):
                     "Text": combined,
                 }
             )
-
     return items
 
 
 def load_csv_from_url(url: str) -> pd.DataFrame:
-    """Load a CSV from a URL."""
     return pd.read_csv(url)
 
 
 def load_csv_from_upload(uploaded_file) -> pd.DataFrame:
-    """Load a CSV from an uploaded file."""
     return pd.read_csv(uploaded_file)
 
 
 def extract_text_column(df: pd.DataFrame, column_name: str):
-    """Extract clean text values from a column."""
     if column_name not in df.columns:
         raise ValueError(f"Column '{column_name}' not found.")
-    series = df[column_name].dropna().astype(str)
-    return series.tolist()
+    return df[column_name].dropna().astype(str).tolist()
 
 
 def analyse_sentiment(texts):
-    """Return average sentiment and list of (text, polarity) items."""
-    results = [(t, TextBlob(t).sentiment.polarity) for t in texts]
+    results = []
+    for t in texts:
+        scores = sia.polarity_scores(t)
+        compound = scores["compound"]
+        results.append((t, compound))
 
     if not results:
         return 0.0, results
@@ -67,9 +63,18 @@ def analyse_sentiment(texts):
     return avg, results
 
 
-def analyse_single_text(text: str) -> float:
-    """Analyse sentiment for a single text string."""
-    return TextBlob(text).sentiment.polarity
+def analyse_single_text(text: str):
+    scores = sia.polarity_scores(text)
+    compound = scores["compound"]
+
+    if compound >= 0.05:
+        label = "positive"
+    elif compound <= -0.05:
+        label = "negative"
+    else:
+        label = "neutral/mixed"
+
+    return compound, label
 
 
 # ---------- STREAMLIT APP LAYOUT ---------- #
@@ -86,22 +91,20 @@ with tabs[0]:
     st.subheader("Overview")
     st.write(
         """
-        This app analyses sentiment on text from either:
+        This app analyses sentiment from:
 
-        - the **UK Parliament petitions API**, or  
-        - **CSV datasets**, such as public data from **data.gov.uk**.
+        - the **UK Parliament petitions API**, and  
+        - **CSV datasets** such as open data from **data.gov.uk**.
 
-        For petitions, the analysis is performed on the **petition text itself**
-        (the title and its short background summary) – not on individual
-        signatures or comments.
+        For petitions, sentiment is applied to the **petition text itself** 
+        (title + background summary).
 
-        For CSV datasets, each row can represent a separate piece of feedback,
-        consultation response or survey answer, allowing you to see overall
-        sentiment and drill into individual examples.
+        For CSV files, each row represents a separate piece of public feedback 
+        — useful for consultation responses, surveys or NHS patient comments.
 
-        The app uses **TextBlob** for simple sentiment analysis and is intended
-        as a small, realistic demo of how lightweight NLP and open data can help
-        communicators understand **public mood around a topic**.
+        The app now uses **VADER**, a rule-based sentiment tool optimised for 
+        short, emotional text, making it far more accurate than simple polarity 
+        tools for public feedback.
         """
     )
 
@@ -112,11 +115,10 @@ with tabs[1]:
     st.subheader("Sentiment from UK Parliament Petitions API")
 
     st.info(
-        "This tab analyses the **tone of the petition text itself** "
-        "(title + background summary), not the views of individual signatories."
+        "This analyses the **tone of the petition text** (title + background), "
+        "not the opinions of signatories."
     )
 
-    # Ensure we have a place to store petitions in session state
     if "petitions" not in st.session_state:
         st.session_state["petitions"] = []
 
@@ -126,10 +128,12 @@ with tabs[1]:
         try:
             with st.spinner("Fetching petition data..."):
                 st.session_state["petitions"] = fetch_petitions(limit)
+
             if not st.session_state["petitions"]:
                 st.warning("No petition texts found.")
             else:
                 st.success(f"Fetched {len(st.session_state['petitions'])} petitions.")
+
         except Exception as e:
             st.error("Error fetching petition data.")
             st.exception(e)
@@ -137,13 +141,9 @@ with tabs[1]:
     petitions = st.session_state["petitions"]
 
     if petitions:
-        # Show a preview table
         st.subheader("Petitions preview")
         st.dataframe(
-            [
-                {"Title": p["Title"], "Summary": p["Summary"]}
-                for p in petitions
-            ],
+            [{"Title": p["Title"], "Summary": p["Summary"]} for p in petitions],
             use_container_width=True,
         )
 
@@ -156,19 +156,18 @@ with tabs[1]:
             texts = [p["Text"] for p in petitions]
             avg, results = analyse_sentiment(texts)
 
-            if avg > 0:
-                overall = "Overall sentiment across these petitions is **slightly positive**."
-            elif avg < 0:
-                overall = "Overall sentiment across these petitions is **slightly negative**."
+            if avg >= 0.05:
+                overall = "Overall sentiment is **positive**."
+            elif avg <= -0.05:
+                overall = "Overall sentiment is **negative**."
             else:
-                overall = "Overall sentiment across these petitions is **neutral**."
+                overall = "Overall sentiment is **neutral/mixed**."
 
             st.subheader("Overall sentiment")
             st.markdown(overall)
             st.metric("Average sentiment score", f"{avg:.3f}")
 
-            # Show sample scores per petition
-            st.subheader("Sample petitions with sentiment scores")
+            st.subheader("Sample petition scores")
             display_rows = []
             for (text, polarity), p in zip(results, petitions):
                 display_rows.append(
@@ -180,28 +179,28 @@ with tabs[1]:
                 )
             st.dataframe(display_rows, use_container_width=True)
 
-        else:  # Analyse a single petition
+        else:
             st.subheader("Select a petition to analyse")
             titles = [p["Title"] for p in petitions]
 
             selected_title = st.selectbox(
                 "Choose a petition",
                 options=titles,
-                index=0 if titles else None,
-                key="petition_select",
+                index=0,
             )
 
             if selected_title:
                 selected = next(p for p in petitions if p["Title"] == selected_title)
                 text = selected["Text"]
-                score = analyse_single_text(text)
 
-                if score > 0:
-                    overall = "This petition is **slightly positive** in tone."
-                elif score < 0:
-                    overall = "This petition is **slightly negative** in tone."
+                score, label = analyse_single_text(text)
+
+                if label == "positive":
+                    overall = "This petition is **positive** in tone."
+                elif label == "negative":
+                    overall = "This petition is **negative** in tone."
                 else:
-                    overall = "This petition is **neutral** in tone."
+                    overall = "This petition is **neutral or mixed** in tone."
 
                 st.subheader("Sentiment for selected petition")
                 st.markdown(overall)
@@ -215,21 +214,25 @@ with tabs[1]:
 
 # -------------------- CSV TAB -------------------- #
 
-# -------------------- CSV EXAMPLE DATASETS -------------------- #
-# These are predefined CSVs you can load instantly.  
-# Replace <your-username> and <your-repo> once your CSV is uploaded to GitHub.
-
 EXAMPLE_CSVS = {
     "Example: NHS Patient Feedback (curated)": {
         "url": "https://raw.githubusercontent.com/Katherine-Holland/sentimentanalysis/refs/heads/main/gov-sentiment-explorer/example_nhs_feedback.csv",
         "text_column": "comment",
     },
 
-    "Demo: Example open CSV": {
+    "Demo: USA states CSV": {
         "url": "https://raw.githubusercontent.com/plotly/datasets/master/2014_usa_states.csv",
         "text_column": "State",
     },
 }
+
+if "csv_texts" not in st.session_state:
+    st.session_state["csv_texts"] = None
+if "csv_mode" not in st.session_state:
+    st.session_state["csv_mode"] = None
+if "csv_avg" not in st.session_state:
+    st.session_state["csv_avg"] = None
+
 
 with tabs[2]:
     st.subheader("Analyse a CSV Dataset")
@@ -262,17 +265,20 @@ with tabs[2]:
                 st.error("Could not load uploaded CSV.")
                 st.exception(e)
 
-    else:  # Example gov/open CSV
+    else:
         example_name = st.selectbox(
             "Choose an example CSV",
             options=list(EXAMPLE_CSVS.keys()),
         )
+
         if example_name:
             info = EXAMPLE_CSVS[example_name]
             csv_url = info["url"]
             chosen_text_column = info["text_column"]
+
             st.write(f"Using example CSV: `{example_name}`")
             st.write(f"Source URL: `{csv_url}`")
+
             try:
                 df = load_csv_from_url(csv_url)
                 st.success("Example CSV loaded successfully.")
@@ -284,9 +290,8 @@ with tabs[2]:
         st.subheader("Preview")
         st.dataframe(df.head(), use_container_width=True)
 
-        # If using an example with a known text column, prefill it
-        if chosen_text_column is not None:
-            st.info(f"Using text column: **{chosen_text_column}** (from example config)")
+        if chosen_text_column:
+            st.info(f"Using text column: **{chosen_text_column}**")
             column_name = chosen_text_column
         else:
             column_name = st.text_input("Text column name")
@@ -301,46 +306,61 @@ with tabs[2]:
         if run_csv and column_name:
             try:
                 texts = extract_text_column(df, column_name)
+                st.session_state["csv_texts"] = texts
+                st.session_state["csv_mode"] = mode_csv_analysis
 
                 if mode_csv_analysis == "Average sentiment (all rows)":
                     avg, _ = analyse_sentiment(texts)
-                    if avg > 0:
-                        overall = "Overall sentiment is **slightly positive**."
-                    elif avg < 0:
-                        overall = "Overall sentiment is **slightly negative**."
-                    else:
-                        overall = "Overall sentiment is **neutral**."
-                    st.subheader("Overall sentiment")
-                    st.markdown(overall)
-                    st.metric("Average sentiment score", f"{avg:.3f}")
-
+                    st.session_state["csv_avg"] = avg
                 else:
-                    st.write("Select a row index to inspect:")
-
-                    selected_idx = st.number_input(
-                        "Row index",
-                        min_value=0,
-                        max_value=len(texts) - 1,
-                        value=0,
-                        step=1,
-                    )
-                    selected_text = texts[selected_idx]
-                    score = analyse_single_text(selected_text)
-
-                    if score > 0:
-                        overall = "This row is **slightly positive** in tone."
-                    elif score < 0:
-                        overall = "This row is **slightly negative** in tone."
-                    else:
-                        overall = "This row is **neutral** in tone."
-
-                    st.subheader("Sentiment for selected row")
-                    st.markdown(overall)
-                    st.metric("Sentiment score", f"{score:.3f}")
-
-                    with st.expander("View full text"):
-                        st.write(selected_text)
+                    st.session_state["csv_avg"] = None
 
             except Exception as e:
                 st.error("Error analysing CSV text.")
                 st.exception(e)
+
+        texts = st.session_state["csv_texts"]
+        stored_mode = st.session_state["csv_mode"]
+        stored_avg = st.session_state["csv_avg"]
+
+        if texts is not None and stored_mode is not None:
+            if stored_mode == "Average sentiment (all rows)":
+                avg = stored_avg if stored_avg is not None else 0
+                if avg >= 0.05:
+                    overall = "Overall sentiment is **positive**."
+                elif avg <= -0.05:
+                    overall = "Overall sentiment is **negative**."
+                else:
+                    overall = "Overall sentiment is **neutral/mixed**."
+
+                st.subheader("Overall sentiment")
+                st.markdown(overall)
+                st.metric("Average sentiment score", f"{avg:.3f}")
+
+            else:
+                st.subheader("Sentiment for selected row")
+
+                selected_idx = st.number_input(
+                    "Row index",
+                    min_value=0,
+                    max_value=len(texts) - 1,
+                    value=0,
+                    step=1,
+                    key="csv_row_index",
+                )
+
+                selected_text = texts[int(selected_idx)]
+                score, label = analyse_single_text(selected_text)
+
+                if label == "positive":
+                    overall = "This row is **positive** in tone."
+                elif label == "negative":
+                    overall = "This row is **negative** in tone."
+                else:
+                    overall = "This row is **neutral or mixed** in tone."
+
+                st.markdown(overall)
+                st.metric("Sentiment score", f"{score:.3f}")
+
+                with st.expander("View full text"):
+                    st.write(selected_text)
