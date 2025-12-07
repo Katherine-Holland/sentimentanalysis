@@ -1,7 +1,14 @@
 import requests
+import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
 import streamlit as st
 import pandas as pd
+
+# Download NLTK data if not present
+try:
+    nltk.data.find('sentiment/vader_lexicon.zip')
+except LookupError:
+    nltk.download('vader_lexicon', quiet=True)
 
 sia = SentimentIntensityAnalyzer()
 

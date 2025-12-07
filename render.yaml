@@ -2,7 +2,7 @@ services:
   - type: web
     name: gov-sentiment-explorer
     runtime: python
-    buildCommand: pip install -r requirements.txt && python -m nltk.downloader vader_lexicon
+    buildCommand: pip install -r requirements.txt
     startCommand: streamlit run gov-sentiment-explorer/gov_sentiment_app.py --server.port $PORT --server.address 0.0.0.0
     envVars:
       - key: PYTHON_VERSION
