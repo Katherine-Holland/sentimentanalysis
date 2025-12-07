@@ -221,11 +221,10 @@ with tabs[1]:
 
 EXAMPLE_CSVS = {
     "Example: NHS Patient Feedback (curated)": {
-        "url": "https://raw.githubusercontent.com/<your-username>/<your-repo>/main/data/example_nhs_feedback.csv",
+        "url": "https://raw.githubusercontent.com/Katherine-Holland/sentimentanalysis/refs/heads/main/gov-sentiment-explorer/example_nhs_feedback.csv",
         "text_column": "comment",
     },
 
-    # You can keep a demo open CSV if you like:
     "Demo: Example open CSV": {
         "url": "https://raw.githubusercontent.com/plotly/datasets/master/2014_usa_states.csv",
         "text_column": "State",
